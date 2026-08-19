@@ -14,7 +14,14 @@ services:
     container_name: attendance-rfid-app
     depends_on:
       - mosquitto
-    env_file:
-      - .env
+    environment:
+      MQTT_BROKER_HOST: mosquitto
+      MQTT_BROKER_PORT: 1883
+      PRESENCE_CONFIG: /app/config/showcase.json
     ports:
       - "8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 3

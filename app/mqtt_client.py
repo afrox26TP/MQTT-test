@@ -7,84 +7,104 @@ from typing import Any
 
 import paho.mqtt.client as mqtt
 
-from app.config import settings
-from app.state import attendance_state
+from app.config import PresenceConfig, settings
+from app.state import PresenceState, Publication
 
 logger = logging.getLogger(__name__)
 
 
 def _utc_now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
-def _try_parse_json(raw: bytes) -> Any:
-    try:
-        return json.loads(raw.decode("utf-8"))
-    except Exception:
-        return None
-
-
-def _message_to_record(topic: str, payload: bytes) -> dict[str, Any]:
-    parsed = _try_parse_json(payload)
-
-    record: dict[str, Any] = {
-        "timestamp": _utc_now_iso(),
-        "topic": topic,
-        "payload_raw": payload.decode("utf-8", errors="replace"),
-        "payload_json": parsed,
-    }
-    return record
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
 class MQTTGateway:
-    def __init__(self) -> None:
-        self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=settings.mqtt_client_id)
+    """Tenká MQTT vrstva; veškerá doménová pravidla zůstávají v PresenceState."""
 
+    def __init__(self, config: PresenceConfig, state: PresenceState) -> None:
+        self.config = config
+        self.state = state
+        self.connected = False
+        self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=settings.mqtt_client_id)
         if settings.mqtt_username:
             self.client.username_pw_set(settings.mqtt_username, settings.mqtt_password)
-
         self.client.on_connect = self._on_connect
         self.client.on_message = self._on_message
         self.client.on_disconnect = self._on_disconnect
 
     def start(self) -> None:
-        logger.info("Connecting to MQTT broker %s:%s", settings.mqtt_broker_host, settings.mqtt_broker_port)
+        logger.info("Připojuji MQTT %s:%s", settings.mqtt_broker_host, settings.mqtt_broker_port)
         self.client.connect(settings.mqtt_broker_host, settings.mqtt_broker_port, keepalive=60)
         self.client.loop_start()
 
     def stop(self) -> None:
         self.client.loop_stop()
-        self.client.disconnect()
+        if self.connected:
+            self.client.disconnect()
 
-    def _on_connect(self, client: mqtt.Client, userdata: Any, flags: Any, reason_code: Any, properties: Any) -> None:
-        logger.info("MQTT connected with reason code: %s", reason_code)
+    def _publish(self, publication: Publication) -> None:
+        payload = json.dumps(publication.payload, ensure_ascii=False, separators=(",", ":"))
+        info = self.client.publish(
+            publication.topic,
+            payload=payload,
+            qos=settings.mqtt_qos,
+            retain=True,
+        )
+        if info.rc != mqtt.MQTT_ERR_SUCCESS:
+            logger.error("Publikování na %s selhalo: rc=%s", publication.topic, info.rc)
 
-        subscriptions = [
-            (settings.mqtt_topic_rfid, settings.mqtt_qos),
-            (settings.mqtt_topic_attendance_events, settings.mqtt_qos),
-            (settings.mqtt_topic_attendance_state, settings.mqtt_qos),
-        ]
-        for topic, qos in subscriptions:
-            client.subscribe(topic, qos=qos)
-            logger.info("Subscribed to topic: %s (qos=%s)", topic, qos)
-
-    def _on_disconnect(self, client: mqtt.Client, userdata: Any, disconnect_flags: Any, reason_code: Any, properties: Any) -> None:
-        logger.warning("MQTT disconnected: %s", reason_code)
-
-    def _on_message(self, client: mqtt.Client, userdata: Any, msg: mqtt.MQTTMessage) -> None:
-        record = _message_to_record(msg.topic, msg.payload)
-        attendance_state.add_message(record)
-
-        payload_json = record.get("payload_json")
-
-        if msg.topic.startswith("rfid/"):
+    def _on_connect(
+        self,
+        client: mqtt.Client,
+        _userdata: Any,
+        _flags: Any,
+        reason_code: Any,
+        _properties: Any,
+    ) -> None:
+        del _userdata, _flags, _properties
+        if reason_code != 0:
+            logger.error("MQTT připojení selhalo: %s", reason_code)
             return
+        self.connected = True
+        logger.info("MQTT připojeno")
+        for reader in self.config.readers.values():
+            client.subscribe(reader.topic_in, qos=settings.mqtt_qos)
+            logger.info("Čtečka %s poslouchá %s", reader.id, reader.topic_in)
 
-        if msg.topic == settings.mqtt_topic_attendance_events and isinstance(payload_json, dict):
-            attendance_state.apply_attendance_event(payload_json)
+        # Retained snapshot zajistí, že noví odběratelé dostanou stav ihned.
+        for publication in self.state.all_publications():
+            self._publish(publication)
 
-        if msg.topic == settings.mqtt_topic_attendance_state and isinstance(payload_json, dict):
-            attendance_state.apply_attendance_snapshot(payload_json)
+    def _on_disconnect(
+        self,
+        _client: mqtt.Client,
+        _userdata: Any,
+        _disconnect_flags: Any,
+        reason_code: Any,
+        _properties: Any,
+    ) -> None:
+        del _client, _userdata, _disconnect_flags, _properties
+        self.connected = False
+        logger.warning("MQTT odpojeno: %s", reason_code)
 
-
-mqtt_gateway = MQTTGateway()
+    def _on_message(self, _client: mqtt.Client, _userdata: Any, msg: mqtt.MQTTMessage) -> None:
+        del _client, _userdata
+        raw = msg.payload.decode("utf-8", errors="replace")
+        record: dict[str, Any] = {
+            "received_at": _utc_now_iso(),
+            "topic": msg.topic,
+            "payload_raw": raw,
+        }
+        try:
+            payload = json.loads(raw)
+            if not isinstance(payload, dict):
+                raise ValueError("payload musí být JSON objekt")
+            record["payload_json"] = payload
+            publications = self.state.apply_reader_event(msg.topic, payload)
+            for publication in publications:
+                self._publish(publication)
+            record["published_topics"] = [item.topic for item in publications]
+        except (json.JSONDecodeError, ValueError) as exc:
+            record["error"] = str(exc)
+            logger.warning("Neplatná zpráva na %s: %s", msg.topic, exc)
+        finally:
+            self.state.add_message(record)

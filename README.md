@@ -1,64 +1,113 @@
-# MQTT RFID + Attendance Gateway
+# AnyGate Presence Engine — showcase
 
-Tato slozka obsahuje jednoduchy Python gateway, ktery:
-- cte RFID data z MQTT topicu,
-- cte dochazkove udalosti (prichod/odchod),
-- cte celkovy snapshot pritomnosti,
-- drzi aktualni stav v pameti,
-- vystavuje stav pres HTTP (`/state`) a jednoduchy web na `/`.
+Malý daemon, který převádí události z čipových a RFID čteček na jednotný stav přítomnosti. Stav drží v paměti a po každé změně publikuje přes MQTT jako **retained** zprávu. Součástí je jednoduchý webový monitor.
 
-Format zprav zatim neni pevny. Aplikace je proto napsana tolerantne:
-- uklada syrove zpravy,
-- zkousi parse JSON,
-- pro attendance event/snapshot pouziva vice moznych klicu (`person`, `name`, `room`, `location`, `event`, `action`, ...).
+## Co ukázka umí
 
-## Pouzita knihovna pro MQTT
+- načíst a zkontrolovat JSON konfiguraci instalace;
+- odvodit přítomnost v celém stromu zón (`chodba → patro → budova`);
+- najít identifier podle typu a kódu a z něj příslušný asset;
+- zpracovat rozdílnou logiku `chips-reader` a `rfid-reader`;
+- publikovat změněné stavy identifierů, assetů, zón a RFID čteček;
+- odmítnout neznámé kódy, špatné události a opožděné zprávy;
+- zobrazit aktuální stav na `http://localhost:8000`.
 
-Pouzita je stabilni knihovna **paho-mqtt** (`paho-mqtt==2.1.0`).
+Ukázková mapa je v [config/showcase.json](config/showcase.json). Obsahuje budovu, druhé patro, chodbu, konferenční místnost a samostatnou pseudozónu `outside`.
 
-## Spusteni pres Docker Compose
+## Jak teče událost systémem
 
-1. Otevri terminal ve slozce `MQTT`.
-2. Spust:
+1. MQTT zpráva přijde na `topic_in` konkrétní čtečky.
+2. Podle typu čtečky se ověří typ události a dohledá identifier podle dvojice `(type, code)`.
+3. Identifier dostane nejvýše jednu přímou zónu. Nadřazené zóny se vždy dopočítají.
+4. Asset převezme polohu identifieru s nejnovější platnou událostí.
+5. Porovná se stav před a po události a publikují se jen změněné pohledy.
+
+### Význam událostí
+
+| Čtečka | Událost | Chování |
+|---|---|---|
+| `chips-reader` | `sign_in` | nastaví zónu čtečky |
+| `chips-reader` | `sign_out` | odstraní polohu, pokud odpovídá zóně čtečky |
+| `rfid-reader` | `rfid_enter` | nastaví zónu a přidá čtečku mezi právě vidící antény |
+| `rfid-reader` | `rfid_leave` | odebere pouze vidící anténu; odvozená zóna zůstává |
+
+**Konfliktní identifiery assetu:** vyhrává událost s nejnovějším `time_utc`. Starší opožděná událost stejného identifieru se ignoruje. Tato politika je záměrně soustředěná v [app/state.py](app/state.py), aby ji šlo po zkušenostech z provozu snadno vyměnit.
+
+## Rychlé spuštění
+
+Požadavek: Docker s Compose.
 
 ```bash
 docker compose up --build
 ```
 
-3. Otevri monitor:
-- `http://localhost:8000/`
-- API stav: `http://localhost:8000/state`
-- Health: `http://localhost:8000/health`
+- monitor: `http://localhost:8000/`
+- celý stav: `http://localhost:8000/state`
+- health check: `http://localhost:8000/health`
 
-## Testovani MQTT zprav
+## Tříkrokové demo
 
-Posilani testovacich zprav lze delat treba pres `mosquitto_pub`:
+V druhém terminálu lze nasimulovat pohyb Alice.
+
+### 1. RFID ji zachytí na chodbě
 
 ```bash
-# RFID zprava
-docker exec -it mqtt-broker mosquitto_pub -h localhost -t rfid/reader-1 -m '{"card_id":"A1B2C3","reader":"reader-1"}'
+docker exec mqtt-broker mosquitto_pub -h localhost -t showcase/readers/corridor/events -m '{"type":"rfid_enter","code":"30121343500000012354892","time_utc":"2026-08-18 10:00:00"}'
+```
 
-# Attendance event (prichod)
-docker exec -it mqtt-broker mosquitto_pub -h localhost -t attendance/events -m '{"person":"Petr","event":"arrive","room":"Lab"}'
+Alice je v `corridor`, a tedy také ve `floor-2` a `building`. Čtečka ji právě vidí.
 
-# Attendance event (odchod)
-docker exec -it mqtt-broker mosquitto_pub -h localhost -t attendance/events -m '{"person":"Petr","event":"leave","room":"Lab"}'
+### 2. RFID ji přestane vidět
 
-# Attendance snapshot
-docker exec -it mqtt-broker mosquitto_pub -h localhost -t attendance/state -m '{"people":[{"person":"Anna","room":"Office","present":true},{"person":"Karel","room":"Lab","present":true}]}'
+```bash
+docker exec mqtt-broker mosquitto_pub -h localhost -t showcase/readers/corridor/events -m '{"type":"rfid_leave","code":"30121343500000012354892","time_utc":"2026-08-18 10:01:00"}'
+```
+
+Pole `readers` se vyprázdní, ale poloha zůstane na chodbě.
+
+### 3. Čipem se přihlásí v konferenční místnosti
+
+```bash
+docker exec mqtt-broker mosquitto_pub -h localhost -t showcase/readers/conference/events -m '{"type":"sign_in","code":"a0cd34","time_utc":"2026-08-18 10:02:00"}'
+```
+
+Alice má dva identifiery s rozdílnou historií. Pro asset `person-alice` vyhraje novější čipová událost a přesune se do `conference-room`.
+
+Publikované retained zprávy lze sledovat takto:
+
+```bash
+docker exec mqtt-broker mosquitto_sub -h localhost -t "showcase/presence/#" -v
 ```
 
 ## Konfigurace
 
-Nastaveni je pres `.env`:
-- `MQTT_BROKER_HOST`, `MQTT_BROKER_PORT`
-- `MQTT_TOPIC_RFID`
-- `MQTT_TOPIC_ATTENDANCE_EVENTS`
-- `MQTT_TOPIC_ATTENDANCE_STATE`
-- `MAX_RECENT_MESSAGES`
+Každá čtečka musí být uvedena právě u jedné zóny. Každý její `topic_in` musí být unikátní. Identifier smí patřit nejvýše jednomu assetu. Při startu se kontrolují také duplicitní ID, neexistující reference a cykly ve stromu zón.
 
-Viz taky `.env.example`.
+Důležité proměnné prostředí:
 
-## Poznamka k produkci
+| Proměnná | Výchozí hodnota |
+|---|---|
+| `MQTT_BROKER_HOST` | `mosquitto` |
+| `MQTT_BROKER_PORT` | `1883` |
+| `MQTT_CLIENT_ID` | `anygate-presence` |
+| `MQTT_QOS` | `1` |
+| `PRESENCE_CONFIG` | `config/showcase.json` |
+| `MAX_RECENT_MESSAGES` | `100` |
 
-Pro produkci muzes stejnou app nasadit do libovolneho kontejneroveho hostingu (Docker/Podman/Kubernetes). Dava to reprodukovatelne behy, jednoduche tagovani image a rychle testovani stejneho runtime jako v produkci.
+## Struktura
+
+- [app/config.py](app/config.py) — datové modely, načtení a validace konfigurace;
+- [app/state.py](app/state.py) — doménová pravidla a sestavení výstupních stavů;
+- [app/mqtt_client.py](app/mqtt_client.py) — odběr vstupů a retained publikování výstupů;
+- [app/main.py](app/main.py) — životní cyklus služby, API a webový monitor;
+- [tests/test_presence.py](tests/test_presence.py) — příklady očekávaného chování.
+
+Testy bez dalších závislostí:
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+## Omezení showcase
+
+Stav je pouze v RAM, takže po restartu začíná prázdný. Produkční verze bude pravděpodobně potřebovat persistentní snapshot, autentizaci/TLS pro MQTT, řízenou aktualizaci konfigurace a dohodnuté chování pro asset bez známé polohy. Pseudozóna `outside` se nyní chová jako běžná samostatná kořenová zóna — asset se do ní dostane pouze explicitní událostí její čtečky.

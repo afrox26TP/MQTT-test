@@ -1,0 +1,86 @@
+{
+  "zones": [
+    {
+      "id": "outside",
+      "parent": null,
+      "readers": ["rfid-gate-outside"],
+      "topic_out_status": "showcase/presence/zones/outside/status"
+    },
+    {
+      "id": "building",
+      "parent": null,
+      "readers": [],
+      "topic_out_status": "showcase/presence/zones/building/status"
+    },
+    {
+      "id": "floor-2",
+      "parent": "building",
+      "readers": [],
+      "topic_out_status": "showcase/presence/zones/floor-2/status"
+    },
+    {
+      "id": "corridor",
+      "parent": "floor-2",
+      "readers": ["rfid-corridor"],
+      "topic_out_status": "showcase/presence/zones/corridor/status"
+    },
+    {
+      "id": "conference-room",
+      "parent": "floor-2",
+      "readers": ["chip-conference"],
+      "topic_out_status": "showcase/presence/zones/conference-room/status"
+    }
+  ],
+  "readers": [
+    {
+      "id": "rfid-gate-outside",
+      "type": "rfid-reader",
+      "topic_in": "showcase/readers/gate-outside/events",
+      "topic_out_status": "showcase/presence/readers/rfid-gate-outside/status"
+    },
+    {
+      "id": "rfid-corridor",
+      "type": "rfid-reader",
+      "topic_in": "showcase/readers/corridor/events",
+      "topic_out_status": "showcase/presence/readers/rfid-corridor/status"
+    },
+    {
+      "id": "chip-conference",
+      "type": "chips-reader",
+      "topic_in": "showcase/readers/conference/events",
+      "topic_out_status": "showcase/presence/readers/chip-conference/status"
+    }
+  ],
+  "identifiers": [
+    {
+      "id": "chip-alice",
+      "type": "chip",
+      "code": "a0cd34",
+      "topic_out_status": "showcase/presence/identifiers/chip-alice/status"
+    },
+    {
+      "id": "rfid-alice",
+      "type": "rfid",
+      "code": "30121343500000012354892",
+      "topic_out_status": "showcase/presence/identifiers/rfid-alice/status"
+    },
+    {
+      "id": "rfid-projector",
+      "type": "rfid",
+      "code": "99000000000000000000001",
+      "topic_out_status": "showcase/presence/identifiers/rfid-projector/status"
+    }
+  ],
+  "assets": [
+    {
+      "id": "person-alice",
+      "identifiers": ["chip-alice", "rfid-alice"],
+      "topic_out_status": "showcase/presence/assets/person-alice/status"
+    },
+    {
+      "id": "projector-1",
+      "identifiers": ["rfid-projector"],
+      "topic_out_status": "showcase/presence/assets/projector-1/status"
+    }
+  ]
+}
