@@ -9,12 +9,14 @@ from fastapi.responses import HTMLResponse
 
 from app.config import load_presence_config, settings
 from app.mqtt_client import MQTTGateway
+from app.persistence import StateStore
 from app.state import PresenceState
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s - %(message)s")
 
 presence_config = load_presence_config(settings.config_path)
-presence_state = PresenceState(presence_config)
+presence_store = StateStore("presence", data_dir=settings.data_dir)
+presence_state = PresenceState(presence_config, store=presence_store)
 mqtt_gateway = MQTTGateway(presence_config, presence_state)
 
 
@@ -37,6 +39,28 @@ def health() -> dict[str, str | bool]:
 @app.get("/state")
 def state() -> dict:
     return presence_state.to_dict()
+
+
+@app.get("/demo")
+def demo() -> dict:
+    """Nasimuluje ukázková data přímo do stavu (bez MQTT)."""
+    now = "2026-08-24 09:00:00"
+    events: list[dict] = [
+        # Alice pípne čip u vchodu → budova
+        ("test/nedvezska/vchod/ctecka_venku", {"type": "sign_in", "code": "AABB001", "time_utc": "2026-08-24 08:00:00"}),
+        # RFID v přízemí zachytí Alici → patro_1
+        ("test/nedvezska/budova/rfid_budova_pod_schody", {"type": "rfid_enter", "code": "E20000112233445566778801", "time_utc": "2026-08-24 08:01:00"}),
+        # RFID v patře zachytí Alici → patro_2
+        ("test/nedvezska/budova/rfid_budova_nad_schody", {"type": "rfid_enter", "code": "E20000112233445566778801", "time_utc": "2026-08-24 08:02:00"}),
+        # Bob venku u silnice → mimo_budovu
+        ("test/nedvezska/budova/rfid_budova_u_silnice", {"type": "rfid_enter", "code": "E20000112233445566778802", "time_utc": "2026-08-24 08:03:00"}),
+    ]
+    for topic, payload in events:
+        try:
+            presence_state.apply_reader_event(topic, payload)
+        except ValueError:
+            pass
+    return {"status": "ok", "message": "Demo data nasimulována. Obnov stránku!", "state_url": "/state"}
 
 
 @app.get("/", response_class=HTMLResponse)

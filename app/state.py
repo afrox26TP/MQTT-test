@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -7,6 +8,8 @@ from threading import Lock
 from typing import Any
 
 from app.config import Asset, Identifier, PresenceConfig, Reader, settings
+
+logger = logging.getLogger(__name__)
 
 
 def utc_now_iso() -> str:
@@ -37,6 +40,31 @@ class IdentifierState:
     changed_at: datetime = field(default_factory=lambda: datetime.min.replace(tzinfo=timezone.utc))
     changed_at_text: str = ""
 
+    def to_dict(self) -> dict[str, Any]:
+        """Serializace pro persistentní úložiště."""
+        return {
+            "direct_zone": self.direct_zone,
+            "readers": sorted(self.readers),
+            "changed_at": self.changed_at_text,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> IdentifierState:
+        """Deserializace z persistentního úložiště."""
+        state = cls()
+        state.direct_zone = data.get("direct_zone") if isinstance(data.get("direct_zone"), str) else None
+        readers = data.get("readers", [])
+        state.readers = set(readers) if isinstance(readers, list) else set()
+        if isinstance(data.get("changed_at"), str):
+            try:
+                parsed, text = _event_time(data["changed_at"])
+                state.changed_at = parsed
+                state.changed_at_text = text
+            except ValueError:
+                state.changed_at = datetime.min.replace(tzinfo=timezone.utc)
+                state.changed_at_text = ""
+        return state
+
 
 @dataclass(frozen=True)
 class Publication:
@@ -51,16 +79,83 @@ class PresenceState:
     dopočítá při výstupu, a proto se nemůže rozcházet s přímou polohou.
     """
 
-    def __init__(self, config: PresenceConfig) -> None:
+    def __init__(self, config: PresenceConfig, store: Any | None = None) -> None:
         self.config = config
+        self._store = store
         self._lock = Lock()
         self._identifier_states = {item_id: IdentifierState() for item_id in config.identifiers}
         self._recent_messages: deque[dict[str, Any]] = deque(maxlen=settings.max_recent_messages)
         self._warnings: deque[str] = deque(maxlen=50)
 
+        if store is not None:
+            self._restore_from_store()
+
     def add_message(self, item: dict[str, Any]) -> None:
         with self._lock:
             self._recent_messages.appendleft(item)
+
+    def _restore_from_store(self) -> None:
+        """Načte persistentní stav a zvaliduje ho proti aktuální konfiguraci."""
+        if self._store is None:
+            return
+        data = self._store.load()
+        if data is None or not isinstance(data, dict):
+            return
+
+        stored = data.get("identifier_states")
+        if not isinstance(stored, dict):
+            return
+
+        restored = 0
+        discarded_identifiers: list[str] = []
+        discarded_zones: set[str] = set()
+        for item_id_str, item_data in stored.items():
+            if not isinstance(item_data, dict):
+                continue
+            # Identifikátor musí existovat v aktuální konfiguraci
+            if item_id_str not in self.config.identifiers:
+                discarded_identifiers.append(item_id_str)
+                continue
+            state = IdentifierState.from_dict(item_data)
+            # Zvaliduj zónu — pokud v nové konfiguraci neexistuje, zahoď ji
+            if state.direct_zone is not None and state.direct_zone not in self.config.zones:
+                discarded_zones.add(state.direct_zone)
+                state.direct_zone = None
+            # Zvaliduj čtečky
+            valid_readers = {r for r in state.readers if r in self.config.readers}
+            if len(valid_readers) != len(state.readers):
+                discarded = state.readers - valid_readers
+                logger.info("Při obnově stavu zahozeny neexistující čtečky: %s", sorted(discarded))
+            state.readers = valid_readers
+            self._identifier_states[item_id_str] = state
+            restored += 1
+
+        if discarded_identifiers:
+            logger.warning(
+                "Při obnově stavu zahozeny identifikátory, které již nejsou v konfiguraci: %s",
+                sorted(discarded_identifiers),
+            )
+        if discarded_zones:
+            logger.warning(
+                "Při obnově stavu zahozeny zóny, které již nejsou v konfiguraci: %s",
+                sorted(discarded_zones),
+            )
+        if restored:
+            logger.info("Obnoveno %d identifikátorů z persistentního úložiště", restored)
+
+    def _persist_snapshot(self) -> None:
+        """Uloží aktuální stav identifikátorů do persistentního úložiště."""
+        if self._store is None:
+            return
+        snapshot: dict[str, Any] = {
+            "identifier_states": {
+                item_id: state.to_dict() for item_id, state in self._identifier_states.items()
+            },
+        }
+        try:
+            self._store.save(snapshot)
+        except OSError as exc:
+            logger.error("Nelze uložit persistentní stav: %s", exc)
 
     def apply_reader_event(self, topic: str, event: dict[str, Any]) -> list[Publication]:
         """Zpracuje událost a vrátí pouze MQTT stavy, které se změnily."""
@@ -101,11 +196,13 @@ class PresenceState:
                 return []
 
             after = self._status_payloads(occurred_at_text)
-            return [
+            publications = [
                 Publication(topic=topic_name, payload=payload)
                 for topic_name, payload in after.items()
                 if before.get(topic_name) != payload
             ]
+            self._persist_snapshot()
+            return publications
 
     @staticmethod
     def _apply_semantics(reader: Reader, state: IdentifierState, event_type: str) -> bool:
@@ -113,6 +210,9 @@ class PresenceState:
         old_readers = set(state.readers)
 
         if event_type == "sign_in":
+            # Auto-sign-out: pokud je identifikátor v jiné zóně, vykopni ho z ní.
+            if state.direct_zone is not None and state.direct_zone != reader.zone_id:
+                state.direct_zone = None
             state.direct_zone = reader.zone_id
         elif event_type == "sign_out":
             # Odhlášení z jiné zóny nesmaže aktuální polohu.
@@ -128,11 +228,38 @@ class PresenceState:
         return old_zone != state.direct_zone or old_readers != state.readers
 
     def _asset_location(self, asset: Asset) -> str | None:
-        # Konfliktní identifiery: vyhrává nejnovější událost s polohou.
+        """Určí polohu assetu podle nakonfigurované conflict_policy."""
         states = [self._identifier_states[item_id] for item_id in asset.identifiers]
         if not states:
             return None
-        return max(states, key=lambda state: state.changed_at).direct_zone
+
+        policy = self.config.conflict_policy
+
+        if policy == "prefer_chip":
+            for identifier_id, state in zip(asset.identifiers, states):
+                identifier = self.config.identifiers.get(identifier_id)
+                if identifier is not None and identifier.type == "chip" and state.direct_zone is not None:
+                    return state.direct_zone
+            # Fallback: žádný chip nemá zónu → newest_event
+            return max(states, key=lambda s: s.changed_at).direct_zone
+
+        if policy == "prefer_rfid":
+            for identifier_id, state in zip(asset.identifiers, states):
+                identifier = self.config.identifiers.get(identifier_id)
+                if identifier is not None and identifier.type == "rfid" and state.direct_zone is not None:
+                    return state.direct_zone
+            # Fallback: žádné rfid nemá zónu → newest_event
+            return max(states, key=lambda s: s.changed_at).direct_zone
+
+        if policy == "priority_order":
+            # Identifikátory v assetu jsou seřazeny podle priority — první se známou zónou vyhrává.
+            for state in states:
+                if state.direct_zone is not None:
+                    return state.direct_zone
+            return None
+
+        # newest_event (výchozí)
+        return max(states, key=lambda s: s.changed_at).direct_zone
 
     def _identifier_payload(self, identifier: Identifier, timestamp: str) -> dict[str, Any]:
         state = self._identifier_states[identifier.id]
@@ -214,7 +341,8 @@ class PresenceState:
         with self._lock:
             timestamp = utc_now_iso()
             return {
-                "policy": "Nejnovější platná událost určuje polohu; RFID leave ruší jen viditelnost.",
+                "policy": f"Conflict policy: {self.config.conflict_policy}",
+                "conflict_policy": self.config.conflict_policy,
                 "identifiers": {
                     item.id: self._identifier_payload(item, timestamp)["presence"]
                     for item in self.config.identifiers.values()

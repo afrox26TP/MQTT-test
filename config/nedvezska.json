@@ -1,0 +1,93 @@
+{
+  "conflict_policy": "newest_event",
+  "zones": [
+    {
+      "id": "mimo_budovu",
+      "parent": null,
+      "readers": ["rfid_u_garazi", "rfid_u_silnice"],
+      "topic_out_status": "nedvezska/presence/zones/mimo_budovu/status"
+    },
+    {
+      "id": "budova",
+      "parent": null,
+      "readers": ["chip_venku"],
+      "topic_out_status": "nedvezska/presence/zones/budova/status"
+    },
+    {
+      "id": "patro_1",
+      "parent": "budova",
+      "readers": ["rfid_pod_schody"],
+      "topic_out_status": "nedvezska/presence/zones/patro_1/status"
+    },
+    {
+      "id": "patro_2",
+      "parent": "budova",
+      "readers": ["rfid_nad_schody"],
+      "topic_out_status": "nedvezska/presence/zones/patro_2/status"
+    }
+  ],
+  "readers": [
+    {
+      "id": "chip_venku",
+      "type": "chips-reader",
+      "topic_in": "test/nedvezska/vchod/ctecka_venku",
+      "topic_out_status": "nedvezska/presence/readers/chip_venku/status"
+    },
+    {
+      "id": "rfid_u_garazi",
+      "type": "rfid-reader",
+      "topic_in": "test/nedvezska/budova/rfid_budova_u_garazi",
+      "topic_out_status": "nedvezska/presence/readers/rfid_u_garazi/status"
+    },
+    {
+      "id": "rfid_u_silnice",
+      "type": "rfid-reader",
+      "topic_in": "test/nedvezska/budova/rfid_budova_u_silnice",
+      "topic_out_status": "nedvezska/presence/readers/rfid_u_silnice/status"
+    },
+    {
+      "id": "rfid_pod_schody",
+      "type": "rfid-reader",
+      "topic_in": "test/nedvezska/budova/rfid_budova_pod_schody",
+      "topic_out_status": "nedvezska/presence/readers/rfid_pod_schody/status"
+    },
+    {
+      "id": "rfid_nad_schody",
+      "type": "rfid-reader",
+      "topic_in": "test/nedvezska/budova/rfid_budova_nad_schody",
+      "topic_out_status": "nedvezska/presence/readers/rfid_nad_schody/status"
+    }
+  ],
+  "identifiers": [
+    {
+      "id": "chip-test-alice",
+      "type": "chip",
+      "code": "AABB001",
+      "topic_out_status": "nedvezska/presence/identifiers/chip-test-alice/status"
+    },
+    {
+      "id": "rfid-test-alice",
+      "type": "rfid",
+      "code": "E20000112233445566778801",
+      "topic_out_status": "nedvezska/presence/identifiers/rfid-test-alice/status"
+    },
+    {
+      "id": "rfid-test-bob",
+      "type": "rfid",
+      "code": "E20000112233445566778802",
+      "topic_out_status": "nedvezska/presence/identifiers/rfid-test-bob/status"
+    }
+  ],
+  "assets": [
+    {
+      "id": "osoba-alice",
+      "identifiers": ["chip-test-alice", "rfid-test-alice"],
+      "topic_out_status": "nedvezska/presence/assets/osoba-alice/status"
+    },
+    {
+      "id": "osoba-bob",
+      "identifiers": ["rfid-test-bob"],
+      "topic_out_status": "nedvezska/presence/assets/osoba-bob/status"
+    }
+  ]
+}

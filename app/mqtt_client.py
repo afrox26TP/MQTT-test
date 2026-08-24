@@ -32,8 +32,15 @@ class MQTTGateway:
         self.client.on_disconnect = self._on_disconnect
 
     def start(self) -> None:
-        logger.info("Připojuji MQTT %s:%s", settings.mqtt_broker_host, settings.mqtt_broker_port)
-        self.client.connect(settings.mqtt_broker_host, settings.mqtt_broker_port, keepalive=60)
+        logger.info("Připojuji MQTT %s:%s (TLS=%s)", settings.mqtt_broker_host, settings.mqtt_broker_port, settings.mqtt_tls)
+        if settings.mqtt_tls:
+            self.client.tls_set()
+            if settings.mqtt_tls_insecure:
+                self.client.tls_insecure_set(True)
+        try:
+            self.client.connect(settings.mqtt_broker_host, settings.mqtt_broker_port, keepalive=60)
+        except OSError as exc:
+            logger.warning("MQTT broker nedostupný (%s), zkouším znovu za 10 s", exc)
         self.client.loop_start()
 
     def stop(self) -> None:

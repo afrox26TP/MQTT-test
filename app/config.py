@@ -6,6 +6,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 
 def _env_int(name: str, default: int) -> int:
     try:
@@ -22,8 +26,11 @@ class Settings:
     mqtt_password: str = os.getenv("MQTT_PASSWORD", "")
     mqtt_client_id: str = os.getenv("MQTT_CLIENT_ID", "anygate-presence")
     mqtt_qos: int = _env_int("MQTT_QOS", 1)
+    mqtt_tls: bool = os.getenv("MQTT_TLS", "false").lower() == "true"
+    mqtt_tls_insecure: bool = os.getenv("MQTT_TLS_INSECURE", "false").lower() == "true"
     config_path: str = os.getenv("PRESENCE_CONFIG", "config/showcase.json")
     max_recent_messages: int = _env_int("MAX_RECENT_MESSAGES", 100)
+    data_dir: str = os.getenv("DATA_DIR", "data")
 
     def __post_init__(self) -> None:
         if not 1 <= self.mqtt_broker_port <= 65535:
@@ -75,6 +82,7 @@ class PresenceConfig:
     readers_by_topic: dict[str, Reader]
     identifiers_by_code: dict[tuple[str, str], Identifier]
     asset_by_identifier: dict[str, Asset]
+    conflict_policy: str = "newest_event"
 
     def ancestors(self, zone_id: str | None) -> tuple[str, ...]:
         """Vrátí přímou zónu a postupně všechny její nadřazené zóny."""
@@ -226,6 +234,14 @@ def load_presence_config(path: str | Path) -> PresenceConfig:
     if len(output_topics) != len(set(output_topics)):
         raise ValueError("Každý topic_out_status musí být v celé konfiguraci unikátní")
 
+    conflict_policy = str(raw.get("conflict_policy", "newest_event")).strip()
+    allowed_policies = {"newest_event", "prefer_chip", "prefer_rfid", "priority_order"}
+    if conflict_policy not in allowed_policies:
+        raise ValueError(
+            f"conflict_policy musí být jedna z {sorted(allowed_policies)}, "
+            f"dostal jsem {conflict_policy!r}"
+        )
+
     return PresenceConfig(
         zones=zones,
         readers=readers,
@@ -234,6 +250,7 @@ def load_presence_config(path: str | Path) -> PresenceConfig:
         readers_by_topic=readers_by_topic,
         identifiers_by_code=identifiers_by_code,
         asset_by_identifier=asset_by_identifier,
+        conflict_policy=conflict_policy,
     )
 
 

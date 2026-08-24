@@ -1,4 +1,5 @@
 {
+  "conflict_policy": "newest_event",
   "zones": [
     {
       "id": "outside",

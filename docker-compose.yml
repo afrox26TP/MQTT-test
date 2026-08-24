@@ -18,6 +18,9 @@ services:
       MQTT_BROKER_HOST: mosquitto
       MQTT_BROKER_PORT: 1883
       PRESENCE_CONFIG: /app/config/showcase.json
+      DATA_DIR: /app/data
+    volumes:
+      - presence_data:/app/data
     ports:
       - "8000:8000"
     healthcheck:
@@ -25,3 +28,6 @@ services:
       interval: 10s
       timeout: 3s
       retries: 3
+
+volumes:
+  presence_data:
