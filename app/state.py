@@ -204,6 +204,74 @@ class PresenceState:
             self._persist_snapshot()
             return publications
 
+    def set_identifier_state(
+        self,
+        identifier_id: str,
+        direct_zone: str | None,
+        readers: set[str] | None = None,
+        changed_at: Any = None,
+    ) -> list[Publication]:
+        """Nastaví mock stav identifikátoru bez nutnosti MQTT události."""
+        identifier = self.config.identifiers.get(identifier_id)
+        if identifier is None:
+            raise ValueError(f"Neznámý identifikátor {identifier_id!r}")
+        if direct_zone is not None and direct_zone not in self.config.zones:
+            raise ValueError(f"Neznámá zóna {direct_zone!r}")
+
+        requested_readers = set(readers or set())
+        unknown_readers = requested_readers - self.config.readers.keys()
+        if unknown_readers:
+            raise ValueError(f"Neznámé čtečky: {sorted(unknown_readers)}")
+        if identifier.type == "chip" and requested_readers:
+            raise ValueError("Čipový identifikátor nemůže být viděn RFID anténou")
+        invalid_readers = {
+            reader_id
+            for reader_id in requested_readers
+            if self.config.readers[reader_id].type != "rfid-reader"
+        }
+        if invalid_readers:
+            raise ValueError(f"Nejsou RFID antény: {sorted(invalid_readers)}")
+
+        occurred_at, occurred_at_text = _event_time(changed_at)
+        with self._lock:
+            before = self._status_payloads(occurred_at_text)
+            state = self._identifier_states[identifier_id]
+            state.direct_zone = direct_zone
+            state.readers = requested_readers
+            state.changed_at = occurred_at
+            state.changed_at_text = occurred_at_text
+            after = self._status_payloads(occurred_at_text)
+            publications = [
+                Publication(topic=topic_name, payload=payload)
+                for topic_name, payload in after.items()
+                if before.get(topic_name) != payload
+            ]
+            self._persist_snapshot()
+            return publications
+
+    def clear_identifier_state(self, identifier_id: str) -> list[Publication]:
+        """Smaže aktuální polohu a viditelnost jednoho identifikátoru."""
+        return self.set_identifier_state(identifier_id, None, set())
+
+    def reset(self) -> list[Publication]:
+        """Smaže všechny odvozené stavy, zprávy, varování i snapshot."""
+        timestamp = utc_now_iso()
+        with self._lock:
+            before = self._status_payloads(timestamp)
+            self._identifier_states = {
+                item_id: IdentifierState() for item_id in self.config.identifiers
+            }
+            self._recent_messages.clear()
+            self._warnings.clear()
+            if self._store is not None:
+                self._store.clear()
+            after = self._status_payloads(timestamp)
+            return [
+                Publication(topic=topic_name, payload=payload)
+                for topic_name, payload in after.items()
+                if before.get(topic_name) != payload
+            ]
+
     @staticmethod
     def _apply_semantics(reader: Reader, state: IdentifierState, event_type: str) -> bool:
         old_zone = state.direct_zone

@@ -12,7 +12,7 @@ Malý daemon, který převádí události z čipových a RFID čteček na jednot
 - odmítnout neznámé kódy, špatné události a opožděné zprávy;
 - zobrazit aktuální stav na `http://localhost:8000`.
 
-Ukázková mapa je v [config/showcase.json](config/showcase.json). Obsahuje budovu, druhé patro, chodbu, konferenční místnost a samostatnou pseudozónu `outside`.
+Mapa reálné instalace je v [config/nedvezska.json](config/nedvezska.json). Vnitřní čipová čtečka je záměrně ignorována jako redundance vnější čtečky. Zóny `patro_1` a `patro_2` jsou potomky zóny `budova`; RFID u garáže a silnice patří do zóny `mimo_budovu`.
 
 ## Jak teče událost systémem
 
@@ -37,13 +37,31 @@ Ukázková mapa je v [config/showcase.json](config/showcase.json). Obsahuje budo
 
 Požadavek: Docker s Compose.
 
+Nejdřív vytvoř lokální konfiguraci prostředí a doplň heslo k brokeru:
+
+```bash
+cp .env.example .env
+```
+
+Soubor `.env` je ignorovaný Gitem. Připojení používá externí TLS broker na portu `8883`. Aktuální nastavení `MQTT_TLS_INSECURE=true` vypíná kontrolu certifikátu; po nasazení důvěryhodného certifikátu nastav hodnotu na `false`.
+
 ```bash
 docker compose up --build
 ```
 
 - monitor: `http://localhost:8000/`
+- testovací administrace: `http://localhost:8000/admin`
 - celý stav: `http://localhost:8000/state`
 - health check: `http://localhost:8000/health`
+
+Úvodní stránka zobrazuje živá data přijatá z brokeru: obsazenost zón, výslednou polohu pracovníků, stav RFID antén a porovnání informace z čipu proti RFID. Mock data nejsou vydávána za zprávy brokeru.
+
+Samostatná testovací administrace na `/admin` funguje i bez MQTT brokeru a umožňuje:
+
+- posílat mock `sign_in`, `sign_out`, `rfid_enter` a `rfid_leave` události;
+- přímo přidat nebo upravit zónu a viditelnost identifikátoru;
+- smazat jednotlivý status nebo celý stav;
+- vložit připravená demo data a sledovat výsledné assety, zóny, čtečky a historii.
 
 ## Tříkrokové demo
 
@@ -89,8 +107,12 @@ Důležité proměnné prostředí:
 |---|---|
 | `MQTT_BROKER_HOST` | `mosquitto` |
 | `MQTT_BROKER_PORT` | `1883` |
+| `MQTT_USERNAME` | prázdné |
+| `MQTT_PASSWORD` | prázdné |
 | `MQTT_CLIENT_ID` | `anygate-presence` |
 | `MQTT_QOS` | `1` |
+| `MQTT_TLS` | `false` |
+| `MQTT_TLS_INSECURE` | `false` |
 | `PRESENCE_CONFIG` | `config/showcase.json` |
 | `MAX_RECENT_MESSAGES` | `100` |
 

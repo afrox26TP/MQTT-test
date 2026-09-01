@@ -1,4 +1,3 @@
-import copy
 import json
 import tempfile
 import unittest
@@ -192,6 +191,41 @@ class PresenceStateTest(unittest.TestCase):
             state2 = PresenceState(trimmed_config, store=store)
             data = state2.to_dict()
             self.assertNotIn("rfid-alice", data["identifiers"])
+
+    def test_admin_can_set_and_delete_identifier_status(self) -> None:
+        publications = self.state.set_identifier_state(
+            "rfid-alice",
+            "corridor",
+            {"rfid-corridor"},
+            "2026-08-17 12:00:00",
+        )
+
+        self.assertTrue(publications)
+        identifier = self.state.to_dict()["identifiers"]["rfid-alice"]
+        self.assertEqual(identifier["zones"], ["corridor", "floor-2", "building"])
+        self.assertEqual(identifier["readers"], ["rfid-corridor"])
+
+        self.state.clear_identifier_state("rfid-alice")
+        identifier = self.state.to_dict()["identifiers"]["rfid-alice"]
+        self.assertEqual(identifier, {"readers": [], "zones": []})
+
+    def test_admin_rejects_rfid_reader_for_chip(self) -> None:
+        with self.assertRaisesRegex(ValueError, "Čipový identifikátor"):
+            self.state.set_identifier_state(
+                "chip-alice", "conference-room", {"rfid-corridor"}
+            )
+
+    def test_admin_reset_clears_all_state_and_messages(self) -> None:
+        self.state.set_identifier_state("rfid-alice", "corridor", {"rfid-corridor"})
+        self.state.add_message({"source": "test"})
+
+        publications = self.state.reset()
+        data = self.state.to_dict()
+
+        self.assertTrue(publications)
+        self.assertEqual(data["recent_messages"], [])
+        self.assertTrue(all(not item["zones"] for item in data["identifiers"].values()))
+        self.assertTrue(all(not item["readers"] for item in data["identifiers"].values()))
 
 if __name__ == "__main__":
     unittest.main()

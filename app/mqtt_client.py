@@ -28,8 +28,10 @@ class MQTTGateway:
         if settings.mqtt_username:
             self.client.username_pw_set(settings.mqtt_username, settings.mqtt_password)
         self.client.on_connect = self._on_connect
+        self.client.on_connect_fail = self._on_connect_fail
         self.client.on_message = self._on_message
         self.client.on_disconnect = self._on_disconnect
+        self.client.reconnect_delay_set(min_delay=1, max_delay=30)
 
     def start(self) -> None:
         logger.info("Připojuji MQTT %s:%s (TLS=%s)", settings.mqtt_broker_host, settings.mqtt_broker_port, settings.mqtt_tls)
@@ -37,10 +39,7 @@ class MQTTGateway:
             self.client.tls_set()
             if settings.mqtt_tls_insecure:
                 self.client.tls_insecure_set(True)
-        try:
-            self.client.connect(settings.mqtt_broker_host, settings.mqtt_broker_port, keepalive=60)
-        except OSError as exc:
-            logger.warning("MQTT broker nedostupný (%s), zkouším znovu za 10 s", exc)
+        self.client.connect_async(settings.mqtt_broker_host, settings.mqtt_broker_port, keepalive=60)
         self.client.loop_start()
 
     def stop(self) -> None:
@@ -58,6 +57,13 @@ class MQTTGateway:
         )
         if info.rc != mqtt.MQTT_ERR_SUCCESS:
             logger.error("Publikování na %s selhalo: rc=%s", publication.topic, info.rc)
+
+    def publish_all(self, publications: list[Publication]) -> None:
+        """Publikuje změny z admin simulátoru, pokud je broker připojený."""
+        if not self.connected:
+            return
+        for publication in publications:
+            self._publish(publication)
 
     def _on_connect(
         self,
@@ -80,6 +86,10 @@ class MQTTGateway:
         # Retained snapshot zajistí, že noví odběratelé dostanou stav ihned.
         for publication in self.state.all_publications():
             self._publish(publication)
+
+    def _on_connect_fail(self, _client: mqtt.Client, _userdata: Any) -> None:
+        del _client, _userdata
+        logger.warning("MQTT připojení se nezdařilo; klient pokus automaticky zopakuje")
 
     def _on_disconnect(
         self,

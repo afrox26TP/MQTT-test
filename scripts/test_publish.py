@@ -17,13 +17,16 @@ import time
 from datetime import datetime, timezone
 
 import paho.mqtt.client as mqtt
+from dotenv import load_dotenv
+
+load_dotenv()
 
 BROKER = os.getenv("MQTT_BROKER_HOST", "hamqttnedvezska.ag.management.orcave.com")
 PORT = int(os.getenv("MQTT_BROKER_PORT", "8883"))
 USER = os.getenv("MQTT_USERNAME", "orcave")
-PASS = os.getenv("MQTT_PASSWORD", "miracle")
+PASS = os.getenv("MQTT_PASSWORD", "")
 TLS = os.getenv("MQTT_TLS", "true").lower() == "true"
-TLS_INSECURE = os.getenv("MQTT_TLS_INSECURE", "true").lower() == "true"
+TLS_INSECURE = os.getenv("MQTT_TLS_INSECURE", "false").lower() == "true"
 
 TOPICS = {
     "chip_venku": "test/nedvezska/vchod/ctecka_venku",
@@ -57,9 +60,9 @@ def main() -> None:
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="test-publisher")
     client.username_pw_set(USER, PASS)
     if TLS:
+        client.tls_set()
         if TLS_INSECURE:
             client.tls_insecure_set(True)
-        client.tls_set()
 
     print(f"Připojuji {BROKER}:{PORT} (TLS={TLS})...")
     client.connect(BROKER, PORT, keepalive=60)

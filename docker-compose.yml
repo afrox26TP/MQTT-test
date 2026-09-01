@@ -1,23 +1,13 @@
 services:
-  mosquitto:
-    image: eclipse-mosquitto:2
-    container_name: mqtt-broker
-    ports:
-      - "1883:1883"
-    volumes:
-      - ./mosquitto/config/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
-
   app:
     build:
       context: .
       dockerfile: Dockerfile
     container_name: attendance-rfid-app
-    depends_on:
-      - mosquitto
+    env_file:
+      - .env
     environment:
-      MQTT_BROKER_HOST: mosquitto
-      MQTT_BROKER_PORT: 1883
-      PRESENCE_CONFIG: /app/config/showcase.json
+      PRESENCE_CONFIG: /app/config/nedvezska.json
       DATA_DIR: /app/data
     volumes:
       - presence_data:/app/data
