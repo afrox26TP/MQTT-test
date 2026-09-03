@@ -180,6 +180,17 @@ def home() -> str:
     :root { font-family: Inter, ui-sans-serif, system-ui, sans-serif; color: #18181b; background: #f8fafc; }
     * { box-sizing: border-box; }
     body { max-width: 1100px; margin: 0 auto; padding: 40px 24px 80px; line-height: 1.5; }
+    :root[data-theme="dark"] { color: #f4f4f5; background: #09090b; color-scheme: dark; }
+    :root[data-theme="dark"] p { color: #a1a1aa; }
+    :root[data-theme="dark"] a { color: #e4e4e7; }
+    :root[data-theme="dark"] .status, :root[data-theme="dark"] .zone,
+    :root[data-theme="dark"] table, :root[data-theme="dark"] pre { background: #18181b; border-color: #3f3f46; }
+    :root[data-theme="dark"] th { background: #27272a; color: #d4d4d8; }
+    :root[data-theme="dark"] th, :root[data-theme="dark"] td,
+    :root[data-theme="dark"] h2 { border-color: #3f3f46; }
+    :root[data-theme="dark"] .ok { color: #4ade80; }
+    :root[data-theme="dark"] .off, :root[data-theme="dark"] .mismatch { color: #f87171; }
+    :root[data-theme="dark"] .match { color: #4ade80; }
     header { display: flex; justify-content: space-between; gap: 20px; align-items: start; margin-bottom: 32px; }
     h1 { margin: 0 0 6px; font-size: 28px; letter-spacing: -.03em; }
     h2 { margin: 38px 0 14px; padding-bottom: 8px; border-bottom: 1px solid #e4e4e7; font-size: 17px; }
@@ -199,14 +210,15 @@ def home() -> str:
     .match { color: #166534; font-weight: 600; }
     .mismatch { color: #b91c1c; font-weight: 600; }
     .unknown { color: #71717a; }
-    pre { max-height: 300px; overflow: auto; padding: 16px; border: 1px solid #e4e4e7; border-radius: 8px; background: #fff; font-size: 12px; white-space: pre-wrap; word-break: break-word; }
+    pre { height: 300px; overflow: auto; padding: 16px; border: 1px solid #e4e4e7; border-radius: 8px; background: #fff; font-size: 12px; white-space: pre-wrap; word-break: break-word; }
+    .theme-toggle { min-height: 34px; padding: 5px 10px; border: 1px solid #d4d4d8; border-radius: 6px; background: transparent; color: inherit; cursor: pointer; }
     @media (max-width: 720px) { body { padding: 24px 14px 60px; } header { display: block; } .status { display: inline-block; margin-top: 14px; } table { display: block; overflow-x: auto; white-space: nowrap; } }
   </style>
 </head>
 <body>
 <header>
   <div><h1>AnyGate Presence</h1><p>Aktuální přítomnost podle čipových čteček a RFID antén</p></div>
-  <div><span id="connection" class="status">Načítám MQTT…</span> &nbsp; <a href="/admin">Testovací administrace</a></div>
+  <div><button id="theme-toggle" class="theme-toggle" type="button">Tmavý režim</button> &nbsp; <span id="connection" class="status">Načítám MQTT…</span> &nbsp; <a href="/admin">Testovací administrace</a></div>
 </header>
 
 <div id="zones" class="zones"></div>
@@ -222,8 +234,18 @@ def home() -> str:
 
 <script>
   let config;
+  let logAutoScroll = true;
   const byId = id => document.getElementById(id);
   const td = (row, value) => { const cell=row.insertCell(); cell.textContent=value || '—'; return cell; };
+  const log = byId('messages');
+  function setTheme(theme) {
+    document.documentElement.dataset.theme=theme;
+    byId('theme-toggle').textContent=theme === 'dark' ? 'Světlý režim' : 'Tmavý režim';
+    localStorage.setItem('theme',theme);
+  }
+  setTheme(localStorage.getItem('theme') || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'));
+  byId('theme-toggle').addEventListener('click', () => setTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'));
+  log.addEventListener('scroll', () => { logAutoScroll=log.scrollHeight-log.scrollTop-log.clientHeight < 8; });
   async function get(url) { const response=await fetch(url); if (!response.ok) throw new Error('API není dostupné'); return response.json(); }
   function directZone(value) { return value.zones[0] || null; }
   function inside(zone) { return zone === 'budova' || zone === 'patro_1' || zone === 'patro_2'; }
@@ -258,7 +280,8 @@ def home() -> str:
         const row=readers.insertRow(), value=data.readers[reader.id]; td(row,reader.id); td(row,reader.zone); td(row,value.assets.join(', '));
       });
       const brokerMessages=data.recent_messages.filter(item => item.source !== 'admin' && item.source !== 'admin-status');
-      byId('messages').textContent=brokerMessages.length ? JSON.stringify(brokerMessages.slice(0,20),null,2) : 'Zatím žádné zprávy z brokeru.';
+      log.textContent=brokerMessages.length ? JSON.stringify(brokerMessages.slice(0,100).reverse(),null,2) : 'Zatím žádné zprávy z brokeru.';
+      if (logAutoScroll) log.scrollTop=log.scrollHeight;
     } catch (error) { byId('connection').textContent=error.message; byId('connection').className='status off'; }
   }
   get('/admin/config').then(value => { config=value; refresh(); setInterval(refresh,2000); });

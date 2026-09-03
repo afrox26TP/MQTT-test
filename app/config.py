@@ -28,6 +28,7 @@ class Settings:
     mqtt_qos: int = _env_int("MQTT_QOS", 1)
     mqtt_tls: bool = os.getenv("MQTT_TLS", "false").lower() == "true"
     mqtt_tls_insecure: bool = os.getenv("MQTT_TLS_INSECURE", "false").lower() == "true"
+    mqtt_monitor_topics: str = os.getenv("MQTT_MONITOR_TOPICS", "")
     config_path: str = os.getenv("PRESENCE_CONFIG", "config/showcase.json")
     max_recent_messages: int = _env_int("MAX_RECENT_MESSAGES", 100)
     data_dir: str = os.getenv("DATA_DIR", "data")

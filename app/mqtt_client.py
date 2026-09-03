@@ -82,6 +82,10 @@ class MQTTGateway:
         for reader in self.config.readers.values():
             client.subscribe(reader.topic_in, qos=settings.mqtt_qos)
             logger.info("Čtečka %s poslouchá %s", reader.id, reader.topic_in)
+        for topic in (item.strip() for item in settings.mqtt_monitor_topics.split(",")):
+            if topic and topic not in self.config.readers_by_topic:
+                client.subscribe(topic, qos=settings.mqtt_qos)
+                logger.info("Monitoring MQTT poslouchá %s", topic)
 
         # Retained snapshot zajistí, že noví odběratelé dostanou stav ihned.
         for publication in self.state.all_publications():
@@ -113,9 +117,12 @@ class MQTTGateway:
         }
         try:
             payload = json.loads(raw)
+            record["payload_json"] = payload
+            if msg.topic not in self.config.readers_by_topic:
+                record["source"] = "mqtt-monitor"
+                return
             if not isinstance(payload, dict):
                 raise ValueError("payload musí být JSON objekt")
-            record["payload_json"] = payload
             publications = self.state.apply_reader_event(msg.topic, payload)
             for publication in publications:
                 self._publish(publication)
